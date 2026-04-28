@@ -144,7 +144,39 @@ builtin unalias -m '[^+]*'
   emulate -L zsh -o extended_glob
 
   local _ftb_query _ftb_complist=() _ftb_headers=() command opts
+  local _ftb_fuzzy_fallback_query=""
   -ftb-generate-complist # sets `_ftb_complist`
+
+  # Fuzzy fallback: when zero candidates and feature is enabled, retry with
+  # blank PREFIX/SUFFIX so all context-appropriate candidates are generated,
+  # then let fzf do the fuzzy matching with the user's original text as query.
+  # Skipped on the first word of the command line so command names aren't
+  # fuzzy-matched (e.g. `itg<TAB>` shouldn't expand to git/integer/it2git/etc).
+  if (( $#_ftb_complist == 0 && CURRENT > 1 )); then
+    local _ftb_do_fuzzy_fallback
+    -ftb-zstyle -b fuzzy-fallback _ftb_do_fuzzy_fallback
+    if [[ $_ftb_do_fuzzy_fallback == yes ]] && [[ -n $PREFIX$SUFFIX ]]; then
+      local _ftb_saved_prefix=$PREFIX _ftb_saved_suffix=$SUFFIX
+      PREFIX="" SUFFIX=""
+
+      _ftb_compcap=() _ftb_groups=()
+      (( $+builtins[fzf-tab-compcap-generate] )) && fzf-tab-compcap-generate -i
+      COLUMNS=500 _ftb__main_complete "$@"
+      (( $+builtins[fzf-tab-compcap-generate] )) && fzf-tab-compcap-generate -o
+
+      PREFIX=$_ftb_saved_prefix SUFFIX=$_ftb_saved_suffix
+
+      _ftb_complist=()
+      -ftb-generate-complist
+
+      if (( $#_ftb_complist > 0 )); then
+        _ftb_fuzzy_fallback=1
+        _ftb_fuzzy_fallback_prefix=$_ftb_saved_prefix
+        _ftb_fuzzy_fallback_suffix=$_ftb_saved_suffix
+        _ftb_fuzzy_fallback_query=$_ftb_saved_prefix
+      fi
+    fi
+  fi
 
   -ftb-zstyle -s continuous-trigger continuous_trigger || {
     [[ $OSTYPE == cygwin ]] && continuous_trigger=// || continuous_trigger=/
@@ -163,11 +195,14 @@ builtin unalias -m '[^+]*'
       # _approximate sets compstate[list] to "force" when showing corrections.
       # If we don't check for this, fzf-tab sees an "unambiguous" prefix and exits early,
       # which falls back to the standard Zsh menu.
+      # Skip this early-exit when fuzzy fallback is active, since we always want to
+      # show fzf to allow the user to see fuzzy matching in action.
       if (( ! _ftb_continue_last )) \
         && [[ $compstate[insert] == *"unambiguous" ]] \
         && [[ -n $compstate[unambiguous] ]] \
         && [[ "$compstate[unambiguous]" != "$compstate[quote]$IPREFIX$PREFIX$compstate[quote]" ]] \
-        && [[ $compstate[list] != *"force"* ]]; then
+        && [[ $compstate[list] != *"force"* ]] \
+        && (( ! _ftb_fuzzy_fallback )); then
         compstate[list]=
         compstate[insert]=unambiguous
         _ftb_finish=1
@@ -175,6 +210,7 @@ builtin unalias -m '[^+]*'
       fi
 
       -ftb-generate-query      # sets `_ftb_query`
+      [[ -n $_ftb_fuzzy_fallback_query ]] && _ftb_query=$_ftb_fuzzy_fallback_query
       -ftb-generate-header     # sets `_ftb_headers`
       -ftb-zstyle -s print-query print_query || print_query=alt-enter
       -ftb-zstyle -s accept-line accept_line
@@ -250,6 +286,13 @@ _fzf-tab-apply() {
     local -a args=("${(@ps:\1:)v[args]}")
     [[ -z $args[1] ]] && args=()  # don't pass an empty string
     IPREFIX=${v[IPREFIX]-} PREFIX=${v[PREFIX]-} SUFFIX=${v[SUFFIX]-} ISUFFIX=${v[ISUFFIX]-}
+    if (( _ftb_fuzzy_fallback )); then
+      # Override PREFIX/SUFFIX with the user's original typed text so zsh
+      # replaces the correct region. Add -U so compadd accepts words that
+      # don't prefix-match.
+      PREFIX=$_ftb_fuzzy_fallback_prefix SUFFIX=$_ftb_fuzzy_fallback_suffix
+      [[ ${args[(I)-U]} -eq 0 ]] && args+=(-U)
+    fi
     builtin compadd "${args[@]:--Q}" -Q -- "$v[word]"
   done
 
@@ -295,6 +338,7 @@ fzf-tab-complete() {
   echoti civis >/dev/tty 2>/dev/null
   while (( _ftb_continue )); do
     local _ftb_choices=() _ftb_compcap=() _ftb_finish=0
+    local _ftb_fuzzy_fallback=0 _ftb_fuzzy_fallback_prefix="" _ftb_fuzzy_fallback_suffix=""
     _ftb_continue=0
     local IN_FZF_TAB=1
     {

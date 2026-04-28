@@ -143,6 +143,20 @@ ls | ftb-tmux-popup
 
 For more information, please see [Wiki#Configuration](https://github.com/Aloxaf/fzf-tab/wiki/Configuration).
 
+### Fuzzy fallback
+
+When zsh's completion produces no matches (e.g., typing a substring that doesn't match any prefix), fzf-tab can retry with all candidates.
+
+```zsh
+zstyle ':fzf-tab:*' fuzzy-fallback yes
+```
+
+With this enabled, `cd fbz<TAB>` in a directory containing `foo-bar-baz` will open fzf with all entries pre-filtered by `fbz`.
+
+The fallback is skipped when completing the first word of the command line, so command names (e.g. `gti<TAB>`) aren't fuzzy-matched.
+
+Default: off
+
 ## Binary module
 
 By default, fzf-tab uses [zsh-ls-colors](https://github.com/xPMo/zsh-ls-colors) to parse and apply ZLS_COLORS if you have set the `list-colors` tag.
